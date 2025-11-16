@@ -19,9 +19,9 @@ def load_certificate_pem(path: str) -> x509.Certificate:
 
 
 def verify_cert_validity(cert: x509.Certificate, at: Optional[datetime.datetime] = None):
-    now = at or datetime.datetime.utcnow()
-    if now < cert.not_valid_before or now > cert.not_valid_after:
-        raise BadCertificate("Certificate is expired or not yet valid")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if now < cert.not_valid_before_utc or now > cert.not_valid_after_utc:
+        raise BadCertificate("certificate is not currently valid")
 
 
 def verify_cert_signed_by_ca(cert: x509.Certificate, ca_cert: x509.Certificate):
