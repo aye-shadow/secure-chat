@@ -2,6 +2,7 @@
 
 import socket
 import struct
+import json
 from app.crypto.pki import (
     load_certificate_pem,
     verify_peer_certificate,
@@ -13,6 +14,7 @@ from app.crypto.dh import (
     derive_shared_key,
 )
 from app.common.utils import recv_cert, send_cert, recv_dh_pub, send_dh_pub
+from app.crypto.aes import aes_encrypt_ecb, aes_decrypt_ecb  
 
 SERVER_HOSTNAME = "127.0.0.1"
 
@@ -75,7 +77,38 @@ def main():
         aes_key = derive_shared_key(client_dh.private_key, server_dh_pub)
         print(f"[DH] derived AES key for {addr}: {aes_key.hex()}")
 
-        # ...continue handshake (AES, IV, MAC, etc.)...
+        # --- Registration step ---
+        # Collect registration data (hard-coded here; replace with input() if needed)
+        email = "alice@example.com"
+        username = "alice"
+        password = "supersecret"
+
+        reg_payload = {
+            "type": "register",
+            "email": email,
+            "username": username,
+            "password": password,
+        }
+        reg_json = json.dumps(reg_payload).encode("utf-8")
+
+        # Encrypt with AES-128-ECB (assignment helper)
+        ciphertext = aes_encrypt_ecb(aes_key, reg_json)
+
+        # Send length-prefixed ciphertext: [4-byte big-endian length][ciphertext]
+        conn.sendall(struct.pack("!I", len(ciphertext)) + ciphertext)
+        print(f"[REG] registration payload sent to {addr}")
+
+                # Optionally, wait for a server response (also encrypted)
+        # resp_len_data = conn.recv(4)
+        # if not resp_len_data:
+        #     print("[REG] no response from server")
+        #     return
+        # (resp_len,) = struct.unpack("!I", resp_len_data)
+        # resp_ct = conn.recv(resp_len)
+        # resp_plain = aes_decrypt_ecb(aes_key, resp_ct)
+        # print("[REG] server response:", resp_plain.decode("utf-8"))
+
+        # ...continue handshake / protocol...
 
 if __name__ == "__main__":
     main()

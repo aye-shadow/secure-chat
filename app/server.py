@@ -1,5 +1,6 @@
 """Server skeleton — plain TCP; no TLS. See assignment spec."""
 import socket
+import json
 import struct
 from app.crypto.pki import (
     load_certificate_pem,
@@ -12,6 +13,8 @@ from app.crypto.dh import (
     derive_shared_key,
 )
 from app.common.utils import recv_cert, send_cert, recv_dh_pub, send_dh_pub
+from app.crypto.aes import aes_encrypt_ecb, aes_decrypt_ecb
+from app.storage.db import create_user
 
 SERVER_HOSTNAME = "server.local"
 
@@ -76,7 +79,54 @@ def main():
                 aes_key = derive_shared_key(server_dh.private_key, client_dh_pub)
                 print(f"[DH] derived AES key for {addr}: {aes_key.hex()}")
 
-                # ...continue handshake (AES, IV, MAC, etc.)...
+                # --- Registration step ---
+                # Receive length-prefixed ciphertext
+                len_hdr = conn.recv(4)
+                if not len_hdr:
+                    print(f"[REG] no data from {addr}")
+                    continue
+                (ct_len,) = struct.unpack("!I", len_hdr)
+                ciphertext = conn.recv(ct_len)
+                if len(ciphertext) != ct_len:
+                    print(f"[REG] incomplete registration ciphertext from {addr}")
+                    continue
+
+                # Decrypt registration JSON
+                try:
+                    reg_json = aes_decrypt_ecb(aes_key, ciphertext)
+                    reg = json.loads(reg_json.decode("utf-8"))
+                except Exception as e:
+                    print(f"[REG_ERROR] bad registration payload from {addr}: {e}")
+                    continue
+
+                if reg.get("type") != "register":
+                    print(f"[REG_ERROR] unexpected message type from {addr}: {reg!r}")
+                    continue
+
+                email = reg.get("email")
+                username = reg.get("username")
+                password = reg.get("password")
+
+                if not (email and username and password):
+                    print(f"[REG_ERROR] missing fields from {addr}: {reg!r}")
+                    continue
+
+                try:
+                    create_user(email, username, password)
+                    print(f"[REG_OK] user {username} registered from {addr}")
+                    # Optionally send encrypted success response
+                    # resp = json.dumps({"status": "ok"}).encode("utf-8")
+                    # resp_ct = aes_encrypt_ecb(aes_key, resp)
+                    # conn.sendall(struct.pack("!I", len(resp_ct)) + resp_ct)
+                except Exception as e:
+                    print(f"[REG_DB_ERROR] could not create user {username}: {e}")
+                    # Optionally send error response
+                    # resp = json.dumps({"status": "error"}).encode("utf-8")
+                    # resp_ct = aes_encrypt_ecb(aes_key, resp)
+                    # conn.sendall(struct.pack("!I", len(resp_ct)) + resp_ct)
+                    continue
+
+                # ...continue protocol (e.g., login, chat, etc.)...
 
 if __name__ == "__main__":
     main()
