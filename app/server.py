@@ -114,19 +114,59 @@ def main():
                 try:
                     create_user(email, username, password)
                     print(f"[REG_OK] user {username} registered from {addr}")
-                    # Optionally send encrypted success response
-                    # resp = json.dumps({"status": "ok"}).encode("utf-8")
-                    # resp_ct = aes_encrypt_ecb(aes_key, resp)
-                    # conn.sendall(struct.pack("!I", len(resp_ct)) + resp_ct)
                 except Exception as e:
                     print(f"[REG_DB_ERROR] could not create user {username}: {e}")
-                    # Optionally send error response
-                    # resp = json.dumps({"status": "error"}).encode("utf-8")
-                    # resp_ct = aes_encrypt_ecb(aes_key, resp)
-                    # conn.sendall(struct.pack("!I", len(resp_ct)) + resp_ct)
                     continue
 
-                # ...continue protocol (e.g., login, chat, etc.)...
+                # --- Login step ---
+                # Receive length-prefixed ciphertext again
+                len_hdr = conn.recv(4)
+                if not len_hdr:
+                    print(f"[LOGIN] no data from {addr}")
+                    continue
+                (ct_len,) = struct.unpack("!I", len_hdr)
+                ciphertext = conn.recv(ct_len)
+                if len(ciphertext) != ct_len:
+                    print(f"[LOGIN] incomplete login ciphertext from {addr}")
+                    continue
+
+                try:
+                    login_json = aes_decrypt_ecb(aes_key, ciphertext)
+                    login_msg = json.loads(login_json.decode("utf-8"))
+                except Exception as e:
+                    print(f"[LOGIN_ERROR] bad login payload from {addr}: {e}")
+                    continue
+
+                if login_msg.get("type") != "login":
+                    print(f"[LOGIN_ERROR] unexpected message type from {addr}: {login_msg!r}")
+                    continue
+
+                login_user = login_msg.get("username")
+                login_pwd = login_msg.get("password")
+
+                if not (login_user and login_pwd):
+                    print(f"[LOGIN_ERROR] missing fields from {addr}: {login_msg!r}")
+                    continue
+
+                from app.storage.db import verify_user
+
+                try:
+                    ok = verify_user(login_user, login_pwd)
+                    if ok:
+                        print(f"[LOGIN_OK] user {login_user} logged in from {addr}")
+                        resp = json.dumps({"status": "ok"}).encode("utf-8")
+                    else:
+                        print(f"[LOGIN_FAIL] invalid credentials for {login_user} from {addr}")
+                        resp = json.dumps({"status": "error", "reason": "invalid_credentials"}).encode("utf-8")
+
+                    resp_ct = aes_encrypt_ecb(aes_key, resp)
+                    conn.sendall(struct.pack("!I", len(resp_ct)) + resp_ct)
+                except Exception as e:
+                    print(f"[LOGIN_DB_ERROR] for user {login_user}: {e}")
+                    resp = json.dumps({"status": "error", "reason": "server_error"}).encode("utf-8")
+                    resp_ct = aes_encrypt_ecb(aes_key, resp)
+                    conn.sendall(struct.pack("!I", len(resp_ct)) + resp_ct)
+                    continue
 
 if __name__ == "__main__":
     main()

@@ -79,8 +79,8 @@ def main():
 
         # --- Registration step ---
         # Collect registration data (hard-coded here; replace with input() if needed)
-        email = "alice@example.com"
-        username = "alice"
+        email = "alice1@example.com"
+        username = "alice1"
         password = "supersecret"
 
         reg_payload = {
@@ -98,17 +98,27 @@ def main():
         conn.sendall(struct.pack("!I", len(ciphertext)) + ciphertext)
         print(f"[REG] registration payload sent to {addr}")
 
-                # Optionally, wait for a server response (also encrypted)
-        # resp_len_data = conn.recv(4)
-        # if not resp_len_data:
-        #     print("[REG] no response from server")
-        #     return
-        # (resp_len,) = struct.unpack("!I", resp_len_data)
-        # resp_ct = conn.recv(resp_len)
-        # resp_plain = aes_decrypt_ecb(aes_key, resp_ct)
-        # print("[REG] server response:", resp_plain.decode("utf-8"))
+        # --- Login step ---
+        login_payload = {
+            "type": "login",
+            "username": username,
+            "password": password,
+        }
+        login_json = json.dumps(login_payload).encode("utf-8")
+        login_ct = aes_encrypt_ecb(aes_key, login_json)
 
-        # ...continue handshake / protocol...
+        conn.sendall(struct.pack("!I", len(login_ct)) + login_ct)
+        print(f"[LOGIN] login payload sent to {addr}")
+
+        # Wait for encrypted login response
+        resp_len_data = conn.recv(4)
+        if not resp_len_data:
+            print("[LOGIN] no response from server")
+            return
+        (resp_len,) = struct.unpack("!I", resp_len_data)
+        resp_ct = conn.recv(resp_len)
+        resp_plain = aes_decrypt_ecb(aes_key, resp_ct)
+        print("[LOGIN] server response:", resp_plain.decode("utf-8"))
 
 if __name__ == "__main__":
     main()
