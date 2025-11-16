@@ -14,7 +14,7 @@ from app.crypto.dh import (
 )
 from app.common.utils import recv_cert, send_cert, recv_dh_pub, send_dh_pub
 from app.crypto.aes import aes_encrypt_ecb, aes_decrypt_ecb
-from app.storage.db import create_user
+from app.storage.db import create_user, verify_user
 
 SERVER_HOSTNAME = "server.local"
 
@@ -148,8 +148,6 @@ def main():
                     print(f"[LOGIN_ERROR] missing fields from {addr}: {login_msg!r}")
                     continue
 
-                from app.storage.db import verify_user
-
                 try:
                     ok = verify_user(login_user, login_pwd)
                     if ok:
@@ -167,6 +165,31 @@ def main():
                     resp_ct = aes_encrypt_ecb(aes_key, resp)
                     conn.sendall(struct.pack("!I", len(resp_ct)) + resp_ct)
                     continue
+
+                # --- Session key establishment (post-login DH) ---
+                if ok:
+                    print(f"[SESSION_DH] generating server session keypair for {addr}")
+                    session_server_dh = generate_dh_keypair()
+                    print(f"[SESSION_DH] sending server session public key to {addr}")
+                    send_dh_pub(conn, session_server_dh.public_bytes)
+
+                    try:
+                        print(f"[SESSION_DH] waiting for client session public key from {addr}")
+                        client_session_dh_pub_bytes = recv_dh_pub(conn)
+                    except Exception as e:
+                        print(f"[SESSION_DH_ERROR] from {addr}: {e}")
+                        continue
+
+                    client_session_dh_pub = load_peer_public_key(client_session_dh_pub_bytes)
+                    session_aes_key = derive_shared_key(session_server_dh.private_key, client_session_dh_pub)
+                    print(f"[SESSION_DH] derived session AES key for {addr}: {session_aes_key.hex()}")
+
+                    # Example: send an encrypted "session ready" message with the new key
+                    session_msg = json.dumps({"type": "session", "status": "ready"}).encode("utf-8")
+                    session_ct = aes_encrypt_ecb(session_aes_key, session_msg)
+                    conn.sendall(struct.pack("!I", len(session_ct)) + session_ct)
+
+                    # TODO: use session_aes_key for subsequent chat messages instead of aes_key
 
 if __name__ == "__main__":
     main()

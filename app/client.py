@@ -79,8 +79,8 @@ def main():
 
         # --- Registration step ---
         # Collect registration data (hard-coded here; replace with input() if needed)
-        email = "alice1@example.com"
-        username = "alice1"
+        email = "alice2@example.com"
+        username = "alice2"
         password = "supersecret"
 
         reg_payload = {
@@ -119,6 +119,47 @@ def main():
         resp_ct = conn.recv(resp_len)
         resp_plain = aes_decrypt_ecb(aes_key, resp_ct)
         print("[LOGIN] server response:", resp_plain.decode("utf-8"))
+
+        # Parse login response
+        try:
+            login_resp = json.loads(resp_plain.decode("utf-8"))
+        except Exception:
+            print("[LOGIN] invalid JSON in server response")
+            return
+
+        if login_resp.get("status") != "ok":
+            print("[LOGIN] login failed, not establishing session key")
+            return
+
+        # --- Session key establishment (post-login DH) ---
+        try:
+            print(f"[SESSION_DH] waiting for server session public key from {addr}")
+            session_server_dh_pub_bytes = recv_dh_pub(conn)
+        except Exception as e:
+            print(f"[SESSION_DH_ERROR] from {addr}: {e}")
+            return
+
+        session_server_dh_pub = load_peer_public_key(session_server_dh_pub_bytes)
+
+        print(f"[SESSION_DH] generating client session keypair for {addr}")
+        session_client_dh = generate_dh_keypair()
+        print(f"[SESSION_DH] sending client session public key to {addr}")
+        send_dh_pub(conn, session_client_dh.public_bytes)
+
+        session_aes_key = derive_shared_key(session_client_dh.private_key, session_server_dh_pub)
+        print(f"[SESSION_DH] derived session AES key for {addr}: {session_aes_key.hex()}")
+
+        # Receive encrypted "session ready" message
+        session_len_data = conn.recv(4)
+        if not session_len_data:
+            print("[SESSION] no session-ready response from server")
+            return
+        (session_len,) = struct.unpack("!I", session_len_data)
+        session_ct = conn.recv(session_len)
+        session_plain = aes_decrypt_ecb(session_aes_key, session_ct)
+        print("[SESSION] server session message:", session_plain.decode("utf-8"))
+
+        # TODO: use session_aes_key for actual chat messages
 
 if __name__ == "__main__":
     main()
