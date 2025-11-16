@@ -7,29 +7,15 @@ from app.crypto.pki import (
     verify_peer_certificate,
     BadCertificate,
 )
+from app.crypto.dh import (
+    generate_dh_keypair,
+    load_peer_public_key,
+    derive_shared_key,
+)
+from app.common.utils import recv_cert, send_cert, recv_dh_pub, send_dh_pub
 
 SERVER_HOSTNAME = "127.0.0.1"
 
-
-def recv_exact(conn: socket.socket, n: int) -> bytes:
-    buf = b""
-    while len(buf) < n:
-        chunk = conn.recv(n - len(buf))
-        if not chunk:
-            raise ConnectionError("peer closed while reading")
-        buf += chunk
-    return buf
-
-
-def recv_cert(conn: socket.socket) -> bytes:
-    # 4‑byte big‑endian length + PEM bytes
-    length_bytes = recv_exact(conn, 4)
-    (length,) = struct.unpack("!I", length_bytes)
-    return recv_exact(conn, length)
-
-
-def send_cert(conn: socket.socket, cert_pem: bytes) -> None:
-    conn.sendall(struct.pack("!I", len(cert_pem)) + cert_pem)
 
 def main():
     ca_cert = load_certificate_pem("certs/ca/ca_cert.pem")
@@ -69,7 +55,27 @@ def main():
             print(f"[BAD_CERT] from {addr}: {e}")
             return
 
-        # ...continue handshake (DH, AES, etc.)...
+        # 3) DH: receive ServerHello (server DH public key)
+        try:
+            print(f"[DH] waiting for server public key from {addr}")
+            server_dh_pub_bytes = recv_dh_pub(conn)
+        except Exception as e:
+            print(f"[DH_ERROR] from {addr}: {e}")
+            return
+
+        server_dh_pub = load_peer_public_key(server_dh_pub_bytes)
+
+        # 4) generate client DH keypair and send Hello
+        print(f"[DH] generating client keypair for {addr}")
+        client_dh = generate_dh_keypair()
+        print(f"[DH] sending client public key to {addr}")
+        send_dh_pub(conn, client_dh.public_bytes)
+
+        # 5) derive shared AES key
+        aes_key = derive_shared_key(client_dh.private_key, server_dh_pub)
+        print(f"[DH] derived AES key for {addr}: {aes_key.hex()}")
+
+        # ...continue handshake (AES, IV, MAC, etc.)...
 
 if __name__ == "__main__":
     main()
