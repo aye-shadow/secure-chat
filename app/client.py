@@ -88,8 +88,8 @@ def main():
 
         # --- Registration step ---
         # Collect registration data (hard-coded here; replace with input() if needed)
-        email = "alice4@example.com"
-        username = "alice4"
+        email = "alice14@example.com"
+        username = "alice14"
         password = "supersecret"
 
         reg_payload = {
@@ -173,6 +173,9 @@ def main():
         client_seq = 0
         last_server_seq = 0
         transcript = []  # append-only transcript of metadata lines
+        last_wire_msg = None  # for replay test
+        last_text = None
+
         while True:
             try:
                 text = input("> ")
@@ -181,8 +184,60 @@ def main():
             if not text:
                 break
 
+            # # Special command: trigger replay of previous message
+            # if text == "REPLAY":
+            #     if last_wire_msg is None:
+            #         print("[REPLAY] no previous message to replay")
+            #         continue
+            #     print("[REPLAY] resending previous message with old seqno")
+            #     conn.sendall(last_wire_msg)
+
+            #     # Log outbound replay metadata (note: same seqno as before)
+            #     import time
+            #     ts = time.time()
+            #     line = f"TX|{client_seq}|{ts}|server|REPLAY({last_text})\n"
+            #     transcript.append(line)
+
+            #     # Try to receive server reply (expected to fail with REPLAY/SIG_FAIL)
+            #     hdr = conn.recv(4)
+            #     if not hdr:
+            #         print("[CHAT] server closed connection after replay test")
+            #         break
+            #     (msg_len,) = struct.unpack("!I", hdr)
+            #     body = conn.recv(msg_len)
+            #     if len(body) != msg_len:
+            #         print("[CHAT] incomplete reply from server after replay")
+            #         break
+            #     try:
+            #         reply_text, last_server_seq = parse_chat_message(
+            #             hdr + body, session_aes_key, server_pubkey, last_server_seq
+            #         )
+            #         print("[CHAT_RX] from server (unexpected):", reply_text)
+            #     except Exception as e:
+            #         print("[CHAT_ERROR] invalid reply from server (expected REPLAY/SIG_FAIL):", e)
+            #         break
+            #     continue
+
             client_seq += 1
             wire_msg = build_chat_message(client_seq, session_aes_key, client_privkey, text)
+            last_wire_msg = wire_msg
+            last_text = text
+
+            # # OPTIONAL: tampering test – flip one bit in the ciphertext on first message
+            # if text == "TAMPER":
+            #     # wire_msg = [4-byte len][JSON bytes]
+            #     length = struct.unpack("!I", wire_msg[:4])[0]
+            #     msg_bytes = bytearray(wire_msg[4:4 + length])
+
+            #     # msg_bytes is the JSON; find the "ct" hex string and flip one nibble
+            #     # For simplicity, flip a byte at some fixed offset (after the header)
+            #     # This will corrupt the ciphertext but leave the signature unchanged.
+            #     if len(msg_bytes) > 40:
+            #         msg_bytes[40] ^= 0x01  # flip one bit
+
+            #     wire_msg = struct.pack("!I", len(msg_bytes)) + bytes(msg_bytes)
+            #     print("[TAMPER] sent tampered ciphertext for SIG_FAIL test")
+
             conn.sendall(wire_msg)
 
             # Log outbound message metadata

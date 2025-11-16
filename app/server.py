@@ -227,7 +227,7 @@ def main():
                             line = f"RX|{last_client_seq}|{ts}|client|{plaintext}\n"
                             transcript.append(line)
                         except Exception as e:
-                            print(f"[CHAT_ERROR] invalid chat message from {addr}: {e}")
+                            print(f"[SIG_FAIL] invalid chat message from {addr}: {e}")
                             break
 
                         # Example echo / server reply
