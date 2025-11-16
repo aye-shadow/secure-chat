@@ -15,6 +15,12 @@ from app.crypto.dh import (
 from app.common.utils import recv_cert, send_cert, recv_dh_pub, send_dh_pub
 from app.crypto.aes import aes_encrypt_ecb, aes_decrypt_ecb
 from app.storage.db import create_user, verify_user
+from app.crypto.chat import (
+    load_private_key,
+    build_chat_message,
+    parse_chat_message,
+)
+from cryptography.hazmat.primitives import serialization
 
 SERVER_HOSTNAME = "server.local"
 
@@ -22,6 +28,7 @@ SERVER_HOSTNAME = "server.local"
 def main():
     ca_cert = load_certificate_pem("certs/ca/ca_cert.pem")
     server_cert = load_certificate_pem("certs/server/cert.pem")
+    server_privkey = load_private_key("certs/server/key.pem")  
 
     server_cert_pem = open("certs/server/cert.pem", "rb").read()
 
@@ -43,6 +50,8 @@ def main():
                 from cryptography import x509
 
                 client_cert = x509.load_pem_x509_certificate(peer_cert_pem)
+                client_pubkey = client_cert.public_key()
+                
                 try:
                     verify_peer_certificate(
                         client_cert,
@@ -189,7 +198,40 @@ def main():
                     session_ct = aes_encrypt_ecb(session_aes_key, session_msg)
                     conn.sendall(struct.pack("!I", len(session_ct)) + session_ct)
 
-                    # TODO: use session_aes_key for subsequent chat messages instead of aes_key
+                    # --- Encrypted chat loop (data plane) ---
+                    print(f"[CHAT] starting secure chat with {addr}")
+                    server_seq = 0
+                    last_client_seq = 0
+                    while True:
+                        # Receive one chat message from client
+                        hdr = conn.recv(4)
+                        if not hdr:
+                            print(f"[CHAT] client {addr} disconnected")
+                            break
+                        (msg_len,) = struct.unpack("!I", hdr)
+                        body = conn.recv(msg_len)
+                        if len(body) != msg_len:
+                            print(f"[CHAT] incomplete chat message from {addr}")
+                            break
+
+                        try:
+                            # parse_chat_message expects full [len][json], so add header back
+                            plaintext, last_client_seq = parse_chat_message(
+                                hdr + body, session_aes_key, client_pubkey, last_client_seq
+                            )
+                            print(f"[CHAT_RX] from {addr}: {plaintext!r}")
+                        except Exception as e:
+                            print(f"[CHAT_ERROR] invalid chat message from {addr}: {e}")
+                            break
+
+                        # Example echo / server reply
+                        reply_text = f"Echo: {plaintext}"
+                        server_seq += 1
+                        reply_wire = build_chat_message(
+                            server_seq, session_aes_key, server_privkey, reply_text
+                        )
+                        conn.sendall(reply_wire)
+                    # end chat loop
 
 if __name__ == "__main__":
     main()

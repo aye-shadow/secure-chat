@@ -15,6 +15,12 @@ from app.crypto.dh import (
 )
 from app.common.utils import recv_cert, send_cert, recv_dh_pub, send_dh_pub
 from app.crypto.aes import aes_encrypt_ecb, aes_decrypt_ecb  
+from app.crypto.chat import (
+    load_private_key,
+    build_chat_message,
+    parse_chat_message,
+)
+from cryptography.hazmat.primitives import serialization
 
 SERVER_HOSTNAME = "127.0.0.1"
 
@@ -22,6 +28,7 @@ SERVER_HOSTNAME = "127.0.0.1"
 def main():
     ca_cert = load_certificate_pem("certs/ca/ca_cert.pem")
     client_cert = load_certificate_pem("certs/client/cert.pem")
+    client_privkey = load_private_key("certs/client/key.pem")  
 
     client_cert_pem = open("certs/client/cert.pem", "rb").read()
 
@@ -45,6 +52,8 @@ def main():
         from cryptography import x509
 
         server_cert = x509.load_pem_x509_certificate(peer_cert_pem)
+        server_pubkey = server_cert.public_key()
+
         try:
             verify_peer_certificate(
                 server_cert,
@@ -79,8 +88,8 @@ def main():
 
         # --- Registration step ---
         # Collect registration data (hard-coded here; replace with input() if needed)
-        email = "alice2@example.com"
-        username = "alice2"
+        email = "alice3@example.com"
+        username = "alice3"
         password = "supersecret"
 
         reg_payload = {
@@ -159,7 +168,42 @@ def main():
         session_plain = aes_decrypt_ecb(session_aes_key, session_ct)
         print("[SESSION] server session message:", session_plain.decode("utf-8"))
 
-        # TODO: use session_aes_key for actual chat messages
+        # --- Encrypted chat loop (data plane) ---
+        print("[CHAT] enter messages, or just press Enter to quit")
+        client_seq = 0
+        last_server_seq = 0
+        while True:
+            try:
+                text = input("> ")
+            except EOFError:
+                break
+            if not text:
+                break
+
+            client_seq += 1
+            wire_msg = build_chat_message(client_seq, session_aes_key, client_privkey, text)
+            conn.sendall(wire_msg)
+
+            # Receive server reply
+            hdr = conn.recv(4)
+            if not hdr:
+                print("[CHAT] server closed connection")
+                break
+            (msg_len,) = struct.unpack("!I", hdr)
+            body = conn.recv(msg_len)
+            if len(body) != msg_len:
+                print("[CHAT] incomplete reply from server")
+                break
+
+            try:
+                reply_text, last_server_seq = parse_chat_message(
+                    hdr + body, session_aes_key, server_pubkey, last_server_seq
+                )
+                print("[CHAT_RX] from server:", reply_text)
+            except Exception as e:
+                print("[CHAT_ERROR] invalid reply from server:", e)
+                break
+        # end chat loop
 
 if __name__ == "__main__":
     main()
