@@ -88,8 +88,8 @@ def main():
 
         # --- Registration step ---
         # Collect registration data (hard-coded here; replace with input() if needed)
-        email = "alice3@example.com"
-        username = "alice3"
+        email = "alice4@example.com"
+        username = "alice4"
         password = "supersecret"
 
         reg_payload = {
@@ -172,6 +172,7 @@ def main():
         print("[CHAT] enter messages, or just press Enter to quit")
         client_seq = 0
         last_server_seq = 0
+        transcript = []  # append-only transcript of metadata lines
         while True:
             try:
                 text = input("> ")
@@ -183,6 +184,12 @@ def main():
             client_seq += 1
             wire_msg = build_chat_message(client_seq, session_aes_key, client_privkey, text)
             conn.sendall(wire_msg)
+
+            # Log outbound message metadata
+            import time
+            ts = time.time()
+            line = f"TX|{client_seq}|{ts}|server|{text}\n"
+            transcript.append(line)
 
             # Receive server reply
             hdr = conn.recv(4)
@@ -200,10 +207,40 @@ def main():
                     hdr + body, session_aes_key, server_pubkey, last_server_seq
                 )
                 print("[CHAT_RX] from server:", reply_text)
+
+                # Log inbound message metadata
+                ts = time.time()
+                line = f"RX|{last_server_seq}|{ts}|server|{reply_text}\n"
+                transcript.append(line)
             except Exception as e:
                 print("[CHAT_ERROR] invalid reply from server:", e)
                 break
         # end chat loop
+
+        # --- Session Receipt (client side) ---
+        from hashlib import sha256
+
+        transcript_bytes = "".join(transcript).encode("utf-8")
+        transcript_hash = sha256(transcript_bytes).digest()
+
+        # Sign the transcript hash with client RSA private key
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+
+        client_receipt_sig = client_privkey.sign(
+            transcript_hash,
+            asym_padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+
+        print("[RECEIPT] client transcript SHA256:", transcript_hash.hex())
+        print("[RECEIPT] client signature:", client_receipt_sig.hex())
+
+        with open("client_session_receipt.txt", "w", encoding="utf-8") as f:
+            f.write("TRANSCRIPT:\n")
+            f.writelines(transcript)
+            f.write("\nHASH:" + transcript_hash.hex() + "\n")
+            f.write("SIG:" + client_receipt_sig.hex() + "\n")
 
 if __name__ == "__main__":
     main()

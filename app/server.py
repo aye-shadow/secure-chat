@@ -51,7 +51,7 @@ def main():
 
                 client_cert = x509.load_pem_x509_certificate(peer_cert_pem)
                 client_pubkey = client_cert.public_key()
-                
+
                 try:
                     verify_peer_certificate(
                         client_cert,
@@ -202,6 +202,7 @@ def main():
                     print(f"[CHAT] starting secure chat with {addr}")
                     server_seq = 0
                     last_client_seq = 0
+                    transcript = []  # append-only transcript of metadata lines
                     while True:
                         # Receive one chat message from client
                         hdr = conn.recv(4)
@@ -215,11 +216,16 @@ def main():
                             break
 
                         try:
-                            # parse_chat_message expects full [len][json], so add header back
                             plaintext, last_client_seq = parse_chat_message(
                                 hdr + body, session_aes_key, client_pubkey, last_client_seq
                             )
                             print(f"[CHAT_RX] from {addr}: {plaintext!r}")
+
+                            # Log inbound message metadata
+                            import time
+                            ts = time.time()
+                            line = f"RX|{last_client_seq}|{ts}|client|{plaintext}\n"
+                            transcript.append(line)
                         except Exception as e:
                             print(f"[CHAT_ERROR] invalid chat message from {addr}: {e}")
                             break
@@ -231,7 +237,35 @@ def main():
                             server_seq, session_aes_key, server_privkey, reply_text
                         )
                         conn.sendall(reply_wire)
+
+                        # Log outbound message metadata
+                        ts = time.time()
+                        line = f"TX|{server_seq}|{ts}|client|{reply_text}\n"
+                        transcript.append(line)
                     # end chat loop
+
+                    # --- Session Receipt (server side) ---
+                    from hashlib import sha256
+                    from cryptography.hazmat.primitives import hashes
+                    from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+
+                    transcript_bytes = "".join(transcript).encode("utf-8")
+                    transcript_hash = sha256(transcript_bytes).digest()
+
+                    server_receipt_sig = server_privkey.sign(
+                        transcript_hash,
+                        asym_padding.PKCS1v15(),
+                        hashes.SHA256(),
+                    )
+
+                    print("[RECEIPT] server transcript SHA256:", transcript_hash.hex())
+                    print("[RECEIPT] server signature:", server_receipt_sig.hex())
+
+                    with open("server_session_receipt.txt", "w", encoding="utf-8") as f:
+                        f.write("TRANSCRIPT:\n")
+                        f.writelines(transcript)
+                        f.write("\nHASH:" + transcript_hash.hex() + "\n")
+                        f.write("SIG:" + server_receipt_sig.hex() + "\n")
 
 if __name__ == "__main__":
     main()
